@@ -1,0 +1,3 @@
+Initial commit: Proofreader plugin shell
+
+Co-Authored-By: Gemini <gemini@google.com>
