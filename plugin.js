@@ -37,37 +37,9 @@ class ProofReaderPlugin {
     }
 
     /**
-     * Constructs the prompt and queries the Local-Llm-Engine plugin
-     * @param {Array} pages - The sliding window of recent pages
-     * @param {Array} characters - The character voice profiles
+     * Helper to execute a prompt against the Local LLM Engine
      */
-    async proofread(pages, characters) {
-        // 1. Construct the System Prompt
-        let systemPrompt = "You are an expert story editor and proofreader. Review the final page of the provided scene. Check for spelling, grammar, and out-of-character dialogue.\n\n";
-        
-        if (characters && characters.length > 0) {
-            systemPrompt += "CHARACTER PROFILES:\n";
-            characters.forEach(char => {
-                if (char.dialogueStylePrompt) {
-                    systemPrompt += `- ${char.name}: ${char.dialogueStylePrompt}\n`;
-                }
-            });
-        }
-
-        // 2. Construct the User Prompt
-        let userPrompt = "SCENE CONTEXT:\n";
-        pages.forEach((page, index) => {
-            userPrompt += `--- Page ${index + 1} ---\n`;
-            userPrompt += JSON.stringify(page.content || page) + "\n";
-        });
-        userPrompt += "\nPlease provide a concise proofreading critique for the final page.";
-
-        // 3. Format into ChatML
-        const promptString = `<|im_start|>system\n${systemPrompt}<|im_end|>\n<|im_start|>user\n${userPrompt}<|im_end|>\n<|im_start|>assistant\n`;
-
-        // 4. Send request to the Local-Llm-Engine plugin running on this same server
-        console.log("[Proof-Reader] Sending request to Local-Llm-Engine...");
-        
+    async executeLLM(promptString) {
         const port = this.port || 3000;
         const response = await fetch(`http://localhost:${port}/api/plugins/Local-Llm-Engine/generate`, {
             method: 'POST',
@@ -75,17 +47,68 @@ class ProofReaderPlugin {
             body: JSON.stringify({
                 prompt: promptString,
                 n_predict: 512,
-                temperature: 0.3
+                temperature: 0.1 // Low temp to enforce strict formatting
             })
         });
 
         const data = await response.json();
+        if (!data.ok) throw new Error(`Engine error: ${data.message}`);
+        return data.content;
+    }
+
+    /**
+     * Performs a two-pass proofreading analysis
+     */
+    async proofread(pages, characters) {
+        // 1. Build the shared Scene Context
+        let sceneContext = "SCENE CONTEXT:\n";
+        pages.forEach((page, index) => {
+            const pageNum = index + 1;
+            sceneContext += `--- Page ${pageNum} ---\n`;
+            // Simplified injection so the LLM doesn't get overwhelmed with raw JSON schema
+            // We just dump the panels array if it exists
+            const content = page.content || page;
+            sceneContext += JSON.stringify(content, null, 2) + "\n";
+        });
         
-        if (!data.ok) {
-            throw new Error(`Engine error: ${data.message}`);
+        const outputFormat = "You must output ONLY in the following strict format for each issue found. Do not include conversational filler, intros, or summaries:\nPage X, Panel Y: [issue type] - [brief note]\n\nIf no issues are found, simply output: 'No issues found.'";
+
+        // ==========================================
+        // PASS 1: GRAMMAR & SPELLING
+        // ==========================================
+        const grammarSysPrompt = `You are an expert copy editor. Review the final page of the provided scene. Check ONLY for spelling, grammar, and structural typos.\n\n${outputFormat}`;
+        const grammarUserPrompt = `${sceneContext}\nPlease provide your grammar and spelling critique for the final page.`;
+        const grammarPromptStr = `<|im_start|>system\n${grammarSysPrompt}<|im_end|>\n<|im_start|>user\n${grammarUserPrompt}<|im_end|>\n<|im_start|>assistant\n`;
+        
+        console.log("[Proof-Reader] Executing Pass 1: Grammar & Spelling...");
+        const grammarResult = await this.executeLLM(grammarPromptStr);
+        let finalCritique = "### Grammar & Spelling\n" + (grammarResult.trim() || "No issues found.");
+
+        // ==========================================
+        // PASS 2: CHARACTER VOICE
+        // ==========================================
+        if (characters && characters.length > 0) {
+            let charProfiles = "CHARACTER PROFILES:\n";
+            let hasProfiles = false;
+            characters.forEach(char => {
+                if (char.dialogueStylePrompt) {
+                    charProfiles += `- ${char.name}: ${char.dialogueStylePrompt}\n`;
+                    hasProfiles = true;
+                }
+            });
+
+            if (hasProfiles) {
+                const voiceSysPrompt = `You are an expert narrative director. Review the final page of the provided scene. Check ONLY for out-of-character dialogue based on the provided character profiles.\n\n${charProfiles}\n\n${outputFormat}`;
+                const voiceUserPrompt = `${sceneContext}\nPlease provide your character voice critique for the final page.`;
+                const voicePromptStr = `<|im_start|>system\n${voiceSysPrompt}<|im_end|>\n<|im_start|>user\n${voiceUserPrompt}<|im_end|>\n<|im_start|>assistant\n`;
+
+                console.log("[Proof-Reader] Executing Pass 2: Character Voice...");
+                const voiceResult = await this.executeLLM(voicePromptStr);
+                finalCritique += "\n\n### Character Voice\n" + (voiceResult.trim() || "No issues found.");
+            }
         }
 
-        return data.content;
+        return finalCritique;
     }
 }
 
