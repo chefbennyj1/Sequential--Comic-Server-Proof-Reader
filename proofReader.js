@@ -1,97 +1,36 @@
-const { spawn } = require('child_process');
-const path = require('path');
-
-class LocalProofreader {
-    constructor() {
-        this.process = null;
-        this.isRunning = false;
-        // Default Llama.cpp server port
-        this.port = 8080; 
+class ProofReaderPlugin {
+    
+    init(subRouter) {
+        console.log('[Proof-Reader] Initializing API routes...');
         
-        // Paths
-        // TODO: We will need the path to the actual llama-server executable
-        this.llamaServerPath = path.join(__dirname, '..', '..', 'ai_models', 'llama-server.exe');
-        this.modelPath = path.join(__dirname, '..', '..', 'ai_models', 'gemma', 'google_gemma-3-4b-it-Q4_K_M.gguf');
-    }
-
-    /**
-     * Starts the local LLM server process and loads the model into VRAM/RAM.
-     */
-    async start() {
-        if (this.isRunning) {
-            console.log("[Proofreader] Server is already running.");
-            return true;
-        }
-
-        console.log(`[Proofreader] Starting local LLM with model: ${this.modelPath}`);
-        
-        try {
-            // Spawn the llama-server child process
-            // Note: We'll configure specific flags (like context size -c) here later
-            this.process = spawn(this.llamaServerPath, [
-                '-m', this.modelPath,
-                '--port', this.port.toString(),
-                '-c', '8192' // 8k context window
-            ]);
-
-            this.process.stdout.on('data', (data) => {
-                // Uncomment to debug server output
-                // console.log(`[Llama-Server]: ${data}`);
-            });
-
-            this.process.stderr.on('data', (data) => {
-                const output = data.toString();
-                // The server prints initialization logs to stderr
-                if (output.includes("HTTP server listening")) {
-                    this.isRunning = true;
-                    console.log(`[Proofreader] Server successfully started on port ${this.port}.`);
+        // Expose endpoint at POST /api/plugins/Proof-Reader/analyze
+        subRouter.post('/analyze', async (req, res) => {
+            try {
+                const { pages, characters } = req.body;
+                
+                if (!pages || !Array.isArray(pages)) {
+                    return res.status(400).json({ ok: false, message: "Missing or invalid 'pages' array in request body." });
                 }
-            });
 
-            this.process.on('close', (code) => {
-                console.log(`[Proofreader] Server process exited with code ${code}`);
-                this.isRunning = false;
-                this.process = null;
-            });
+                const critique = await this.proofread(pages, characters);
+                res.json({ ok: true, content: critique });
 
-            // We need a short delay to allow the model to load into memory
-            // In a production version, we would ping the /health endpoint until ready
-            return new Promise(resolve => setTimeout(() => resolve(true), 3000));
-
-        } catch (err) {
-            console.error("[Proofreader] Failed to start server:", err);
-            this.isRunning = false;
-            return false;
-        }
+            } catch (err) {
+                console.error("[Proof-Reader] Analysis failed:", err);
+                res.status(500).json({ ok: false, message: err.message });
+            }
+        });
     }
 
     /**
-     * Kills the LLM server process, immediately freeing up system RAM/VRAM.
-     */
-    stop() {
-        if (!this.isRunning || !this.process) {
-            console.log("[Proofreader] Server is not running.");
-            return;
-        }
-
-        console.log("[Proofreader] Stopping local LLM server to free resources...");
-        this.process.kill('SIGINT');
-        this.process = null;
-        this.isRunning = false;
-    }
-
-    /**
-     * Sends a proofreading request to the local LLM.
-     * @param {Array} pages - The sliding window of recent pages (e.g. [page1, page2, page3])
-     * @param {Array} characters - The character voice profiles for context
+     * Constructs the prompt and queries the Local-Llm-Engine plugin
+     * @param {Array} pages - The sliding window of recent pages
+     * @param {Array} characters - The character voice profiles
      */
     async proofread(pages, characters) {
-        if (!this.isRunning) {
-            throw new Error("Proofreader server is not running. Please start it first.");
-        }
-
-        // 1. Construct the System Prompt using the Character voice profiles
+        // 1. Construct the System Prompt
         let systemPrompt = "You are an expert story editor and proofreader. Review the final page of the provided scene. Check for spelling, grammar, and out-of-character dialogue.\n\n";
+        
         if (characters && characters.length > 0) {
             systemPrompt += "CHARACTER PROFILES:\n";
             characters.forEach(char => {
@@ -101,36 +40,39 @@ class LocalProofreader {
             });
         }
 
-        // 2. Construct the User Prompt using the pages text
+        // 2. Construct the User Prompt
         let userPrompt = "SCENE CONTEXT:\n";
         pages.forEach((page, index) => {
             userPrompt += `--- Page ${index + 1} ---\n`;
-            // TODO: Parse the actual page data (dialogue bubbles, narrator text) here
-            userPrompt += JSON.stringify(page.content) + "\n";
+            userPrompt += JSON.stringify(page.content || page) + "\n";
         });
         userPrompt += "\nPlease provide a concise proofreading critique for the final page.";
 
-        // 3. Send the request to the local llama-server API
-        console.log("[Proofreader] Sending prompt to local LLM...");
-        
-        try {
-            const response = await fetch(`http://localhost:${this.port}/completion`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    prompt: `<|im_start|>system\n${systemPrompt}<|im_end|>\n<|im_start|>user\n${userPrompt}<|im_end|>\n<|im_start|>assistant\n`,
-                    n_predict: 512, // Max tokens to generate
-                    temperature: 0.3 // Low temperature for focused editing
-                })
-            });
+        // 3. Format into ChatML
+        const promptString = `<|im_start|>system\n${systemPrompt}<|im_end|>\n<|im_start|>user\n${userPrompt}<|im_end|>\n<|im_start|>assistant\n`;
 
-            const data = await response.json();
-            return data.content; // The LLM's response
-        } catch (err) {
-            console.error("[Proofreader] Error generating critique:", err);
-            throw err;
+        // 4. Send request to the Local-Llm-Engine plugin running on this same server
+        console.log("[Proof-Reader] Sending request to Local-Llm-Engine...");
+        
+        // Assuming the server is running on port 3000
+        const response = await fetch(`http://localhost:3000/api/plugins/Local-Llm-Engine/generate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                prompt: promptString,
+                n_predict: 512,
+                temperature: 0.3
+            })
+        });
+
+        const data = await response.json();
+        
+        if (!data.ok) {
+            throw new Error(`Engine error: ${data.message}`);
         }
+
+        return data.content;
     }
 }
 
-module.exports = new LocalProofreader();
+module.exports = new ProofReaderPlugin();

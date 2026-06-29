@@ -4,7 +4,7 @@ This plugin provides automated proofreading, grammar checking, and "out-of-chara
 
 ## Dependencies & Requirements
 
-* **Local LLM Engine Plugin:** This plugin relies heavily on the `localLlmEngine` plugin being installed and enabled. It does not spawn an AI process itself; instead, it queries `/api/plugins/localLlmEngine/generate`.
+* **Local LLM Engine Plugin:** This plugin relies heavily on the `Local-Llm-Engine` plugin being installed and enabled. It does not spawn an AI process itself; instead, it queries `/api/plugins/Local-Llm-Engine/generate`.
 * **Character Lab Data:** To detect out-of-character dialogue, this plugin fetches the `dialogueStylePrompt` field from your Character bibles in the database and injects them into the LLM system prompt.
 
 ## How it works
