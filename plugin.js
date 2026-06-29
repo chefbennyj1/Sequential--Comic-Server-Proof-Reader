@@ -1,11 +1,25 @@
 class ProofReaderPlugin {
     
-    init(subRouter) {
-        console.log('[Proof-Reader] Initializing API routes...');
+    init(subRouter, config = {}) {
+        this.port = config.port || 3000;
+        console.log(`[Proof-Reader] Initializing API routes on port ${this.port}...`);
+        
+        this.config = config;
         
         // Expose endpoint at POST /api/plugins/Proof-Reader/analyze
         subRouter.post('/analyze', async (req, res) => {
             try {
+                // 1. Dependency Check
+                const deps = this.config.manifest?.dependencies || [];
+                for (const dep of deps) {
+                    if (!this.config.isPluginEnabled(dep)) {
+                        return res.status(503).json({ 
+                            ok: false, 
+                            message: `Dependency missing: The '${dep}' plugin must be enabled to run Proof-Reader.` 
+                        });
+                    }
+                }
+                
                 const { pages, characters } = req.body;
                 
                 if (!pages || !Array.isArray(pages)) {
@@ -54,8 +68,8 @@ class ProofReaderPlugin {
         // 4. Send request to the Local-Llm-Engine plugin running on this same server
         console.log("[Proof-Reader] Sending request to Local-Llm-Engine...");
         
-        // Assuming the server is running on port 3000
-        const response = await fetch(`http://localhost:3000/api/plugins/Local-Llm-Engine/generate`, {
+        const port = this.port || 3000;
+        const response = await fetch(`http://localhost:${port}/api/plugins/Local-Llm-Engine/generate`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({

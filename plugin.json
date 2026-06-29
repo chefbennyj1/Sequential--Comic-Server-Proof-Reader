@@ -3,6 +3,6 @@
   "version": "1.0.0",
   "description": "Scans dialogue and text for typos and out-of-character speech using a local LLM via llama.cpp",
   "author": "Benjamin & Gemini",
-  "file": "proofReader.js",
-  "enabled": true
+  "enabled": true,
+  "dependencies": ["Local-Llm-Engine"]
 }

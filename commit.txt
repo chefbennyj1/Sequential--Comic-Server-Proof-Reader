@@ -1,3 +1,0 @@
-Rewrite Proof-Reader to query Local-Llm-Engine API endpoints
-
-Co-Authored-By: Gemini <gemini@google.com>
